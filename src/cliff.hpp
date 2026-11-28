@@ -100,6 +100,25 @@ CliffResult solveCliffLine(const CliffData& data, int family,
                            CliffHighSide highSide, double wallHeight,
                            int width, int height, uint64_t seed);
 
+/// Result of closing a cut in a wall (solveCliffCut), per local cell.
+struct CliffCutResult {
+    int width = 0, height = 0;
+    std::vector<int> tile;          ///< new cliff tile index, -1 = unchanged
+    std::vector<uint8_t> ground;    ///< 1 = was a cliff cell, keeps no rock: becomes plain ground
+    int stage = -2;                 ///< solver stage that succeeded, -2 = nothing solved
+};
+
+/// Lets a wall end cleanly where cells were cut out of it (painting ground
+/// across a cliff, e.g. for a ramp). cliffTiles: per local cell the cliff
+/// tile standing there (-1 = none; tiles of other families are ignored).
+/// removed: cells that were cliff and are ground now. The wall's rock band is
+/// recovered from the tiles' inner images and opened towards the cut; only
+/// the cliff cells within `zone` cells of the cut are solved again, and the
+/// rest of the wall stays, constraining them as fixed neighbours. If no
+/// solver stage succeeds, nothing changes (stage -2). Deterministic.
+CliffCutResult solveCliffCut(const CliffData& data, int family, const std::vector<int>& cliffTiles,
+                             const std::vector<uint8_t>& removed, int width, int height, int zone = 2);
+
 /// Snaps (bx, by) so the segment from (ax, ay) uses an allowed cliff slope:
 /// flat, vertical, 45 degrees, or 2:1, 3:1, 4:1 either way.
 void snapCliffPoint(int ax, int ay, int bx, int by, int& outX, int& outY);

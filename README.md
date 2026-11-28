@@ -184,7 +184,8 @@ om_blend_get_changes(map, changes, n);                   /* tiles + cell types *
 
 For interactive drawing, `om_cliff_snap_point` snaps each new point to an
 allowed slope. Cliff cells become fixed for blending, so painting next to a
-cliff never replaces it.
+cliff never replaces it. Painting ground across a wall cuts it; afterwards
+`om_cliff_close_cut` lets both new ends finish cleanly (a ramp).
 
 Regions need only the cell types:
 

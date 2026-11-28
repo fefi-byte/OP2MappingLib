@@ -199,6 +199,15 @@ OM_API int OM_CALL om_cliff_draw(om_blend_map* map, const int32_t* xy, int32_t p
     }
 }
 
+OM_API int OM_CALL om_cliff_close_cut(om_blend_map* map, const uint8_t* removed, uint64_t seed) {
+    if (!map || !removed) return -1;
+    try {
+        return map->map->closeCliffCut(removed, seed);
+    } catch (...) {
+        return -1;
+    }
+}
+
 OM_API int OM_CALL om_cliff_last_stage(const om_blend_map* map) {
     return map ? map->map->lastCliffStage() : -2;
 }

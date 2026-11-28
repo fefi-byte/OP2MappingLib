@@ -196,6 +196,7 @@ def _load():
         "om_cliff_draw": (ctypes.c_int, [P, ctypes.POINTER(ctypes.c_int32), ctypes.c_int32,
                                          ctypes.c_int, ctypes.c_double, ctypes.c_uint64]),
         "om_cliff_last_stage": (ctypes.c_int, [P]),
+        "om_cliff_close_cut": (ctypes.c_int, [P, ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint64]),
         "om_cliff_snap_point": (None, [ctypes.c_int32, ctypes.c_int32, ctypes.c_int32, ctypes.c_int32,
                                        ctypes.POINTER(ctypes.c_int32), ctypes.POINTER(ctypes.c_int32)]),
         "om_regions_op2_flags": (ctypes.c_uint32, [ctypes.c_int32, ctypes.c_int32]),
@@ -565,6 +566,33 @@ class BlendMap:
         n = _lib.om_cliff_draw(self._h, arr, len(points), high_side, float(wall_height), ctypes.c_uint64(seed))
         if n < 0:
             raise Op2MapLibError("invalid cliff input")
+        return self._changes(n)
+
+    def close_cliff_cut(self, removed, seed: int = 0) -> list[Change]:
+        """Closes cut wall ends after ground was painted across a cliff (om_cliff_close_cut).
+
+        Args:
+            removed: width*height flags, row by row (a sequence, bytes or a
+                numpy array): nonzero = the cell was a cliff before the
+                stroke and is ground now.
+            seed:    seed for blending the cells that become ground.
+
+        Returns:
+            The changes to apply to your map: re-solved cliff tiles first,
+            then the blended ground of cliff cells that keep no rock. Empty if
+            there was nothing to close or no solution (the wall stays as is).
+
+        Raises:
+            ValueError:     removed has the wrong size.
+            Op2MapLibError: the library reported an error.
+        """
+        flags = bytes(int(bool(v)) for v in (removed.ravel() if hasattr(removed, "ravel") else removed))
+        if len(flags) != self.width * self.height:
+            raise ValueError("removed needs width*height entries")
+        arr = (ctypes.c_uint8 * len(flags)).from_buffer_copy(flags)
+        n = _lib.om_cliff_close_cut(self._h, arr, ctypes.c_uint64(seed))
+        if n < 0:
+            raise Op2MapLibError("closing the cliff cut failed")
         return self._changes(n)
 
     @property

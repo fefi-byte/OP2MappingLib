@@ -86,6 +86,23 @@ BlendMap::BlendMap(const Profile& profile, int width, int height,
         auto it = firstMapping.find(key);
         if (it != firstMapping.end()) mappingOfCliff_[i] = it->second;
     }
+    // And back: which cliff tile a mapping index shows (the first cliff tile
+    // with that image wins).
+    cliffOfMapping_.assign(static_cast<size_t>(mappingCount), -1);
+    {
+        std::unordered_map<uint64_t, int> cliffOfKey;
+        for (size_t i = 0; i < profile.cliffs.tiles.size(); ++i) {
+            const CliffTile& c = profile.cliffs.tiles[i];
+            cliffOfKey.emplace((static_cast<uint64_t>(static_cast<uint32_t>(c.tileset)) << 32) | static_cast<uint32_t>(c.image),
+                               static_cast<int>(i));
+        }
+        for (int m = 0; m < mappingCount; ++m) {
+            const int ts = profile.findTileset(lower(mappings[m].tileset));
+            if (ts < 0) continue;
+            auto it = cliffOfKey.find((static_cast<uint64_t>(static_cast<uint32_t>(ts)) << 32) | static_cast<uint32_t>(mappings[m].image));
+            if (it != cliffOfKey.end()) cliffOfMapping_[m] = it->second;
+        }
+    }
 
     // Copy the cells and derive each cell's ground from its tile. Mapping
     // indices beyond the table give ground -1 (fixed), like unknown tiles.
@@ -381,6 +398,128 @@ int BlendMap::drawCliff(const int32_t* xy, int count, int highSide, double wallH
         ground_[idx(c.x, c.y)] = static_cast<int8_t>(groundOfMapping(c.new_mapping));   // cliffs are fixed (-1)
         painted_[idx(c.x, c.y)] = 0;
     }
+    return static_cast<int>(changes_.size());
+}
+
+// Closes cut wall ends: finds the cliff family around the cut, lets the cliff
+// code (solveCliffCut) re-solve the wall cells near it, and turns cliff cells
+// that keep no rock into ground of their surroundings, which a resolve of
+// that area then gives proper tiles. The cliff changes come first in the
+// change list, then the resolve's.
+int BlendMap::closeCliffCut(const uint8_t* removed, uint64_t seed) {
+    changes_.clear();
+    lastCliffStage_ = -2;
+    if (!removed) return -1;
+    const CliffData& cliffs = profile_.cliffs;
+    if (cliffs.empty()) return 0;
+    auto cliffAt = [&](int x, int y) {
+        const int m = mapping_[idx(x, y)];
+        return (m >= 0 && m < static_cast<int>(cliffOfMapping_.size())) ? cliffOfMapping_[m] : -1;
+    };
+
+    // The cut: flagged cells that hold no cliff tile now. The family is the
+    // most common one among the cliff cells touching it (ties: lowest index).
+    std::vector<int> famCount(cliffs.families.size(), 0);
+    int bx0 = width_, by0 = height_, bx1 = -1, by1 = -1;
+    for (int y = 0; y < height_; ++y)
+        for (int x = 0; x < width_; ++x) {
+            if (!removed[idx(x, y)] || cliffAt(x, y) >= 0) continue;
+            bx0 = std::min(bx0, x); bx1 = std::max(bx1, x);
+            by0 = std::min(by0, y); by1 = std::max(by1, y);
+            static const int dx4[4] = {0, 1, 0, -1}, dy4[4] = {-1, 0, 1, 0};
+            for (int s = 0; s < 4; ++s) {
+                const int nx = x + dx4[s], ny = y + dy4[s];
+                if (!inside(nx, ny)) continue;
+                const int t = cliffAt(nx, ny);
+                if (t >= 0 && cliffs.tiles[t].family >= 0) ++famCount[cliffs.tiles[t].family];
+            }
+        }
+    int family = -1, best = 0;
+    for (size_t f = 0; f < famCount.size(); ++f)
+        if (famCount[f] > best) {
+            best = famCount[f];
+            family = static_cast<int>(f);
+        }
+    if (family < 0 || !cliffs.usable(family)) return 0;
+
+    // Work window: the cut plus the re-solved zone (2 cells) and room for the
+    // fixed neighbours around it.
+    const int zone = 2, margin = zone + 4;
+    const int x0 = std::max(0, bx0 - margin), y0 = std::max(0, by0 - margin);
+    const int x1 = std::min(width_ - 1, bx1 + margin), y1 = std::min(height_ - 1, by1 + margin);
+    const int w = x1 - x0 + 1, h = y1 - y0 + 1;
+    std::vector<int> tiles(static_cast<size_t>(w) * h, -1);
+    std::vector<uint8_t> cut(static_cast<size_t>(w) * h, 0);
+    for (int y = y0; y <= y1; ++y)
+        for (int x = x0; x <= x1; ++x) {
+            const size_t i = static_cast<size_t>(y - y0) * w + (x - x0);
+            tiles[i] = cliffAt(x, y);
+            cut[i] = removed[idx(x, y)] && tiles[i] < 0;
+        }
+    // Two cells around the cut first; if the solver finds nothing there
+    // (e.g. a thin north edge), a wider zone gives it more room.
+    CliffCutResult res;
+    for (int z = zone; z <= zone + 2 && res.stage < 0; ++z) res = solveCliffCut(cliffs, family, tiles, cut, w, h, z);
+    lastCliffStage_ = res.stage;
+    if (res.stage < 0) return 0;
+
+    std::vector<om_change> mine;
+    for (int ly = 0; ly < h; ++ly)
+        for (int lx = 0; lx < w; ++lx) {
+            const int t = res.tile[static_cast<size_t>(ly) * w + lx];
+            if (t < 0) continue;
+            const int m = mappingOfCliff_[t];
+            const int x = lx + x0, y = ly + y0;
+            if (m < 0 || m == mapping_[idx(x, y)]) continue;   // tile missing in this map, or unchanged
+            mine.push_back({x, y, mapping_[idx(x, y)], m, cliffs.tiles[t].cellType});
+        }
+    for (const om_change& c : mine) {
+        mapping_[idx(c.x, c.y)] = c.new_mapping;
+        ground_[idx(c.x, c.y)] = static_cast<int8_t>(groundOfMapping(c.new_mapping));
+        painted_[idx(c.x, c.y)] = 0;
+    }
+
+    // Former cliff cells without rock: the most common ground within two
+    // cells (not counting fixed cells or other such cells), then a resolve.
+    int gx0 = width_, gy0 = height_, gx1 = -1, gy1 = -1;
+    std::vector<std::pair<std::pair<int, int>, int>> grounds;
+    for (int ly = 0; ly < h; ++ly)
+        for (int lx = 0; lx < w; ++lx) {
+            if (!res.ground[static_cast<size_t>(ly) * w + lx]) continue;
+            const int x = lx + x0, y = ly + y0;
+            std::vector<int> count(profile_.grounds.size(), 0);
+            for (int dy = -2; dy <= 2; ++dy)
+                for (int dx = -2; dx <= 2; ++dx) {
+                    const int qx = x + dx, qy = y + dy;
+                    if (!inside(qx, qy)) continue;
+                    const int lqx = qx - x0, lqy = qy - y0;
+                    if (lqx >= 0 && lqy >= 0 && lqx < w && lqy < h && res.ground[static_cast<size_t>(lqy) * w + lqx]) continue;
+                    const int g = ground_[idx(qx, qy)];
+                    if (g >= 0) ++count[g];
+                }
+            int g = -1, n = 0;
+            for (size_t k = 0; k < count.size(); ++k)
+                if (count[k] > n) {
+                    n = count[k];
+                    g = static_cast<int>(k);
+                }
+            if (g < 0) continue;
+            grounds.push_back({{x, y}, g});
+            gx0 = std::min(gx0, x); gx1 = std::max(gx1, x);
+            gy0 = std::min(gy0, y); gy1 = std::max(gy1, y);
+        }
+    for (const auto& [p, g] : grounds) {
+        ground_[idx(p.first, p.second)] = static_cast<int8_t>(g);
+        painted_[idx(p.first, p.second)] = 1;
+    }
+    std::vector<om_change> blended;
+    if (!grounds.empty()) {
+        const om_rect r{gx0, gy0, gx1 - gx0 + 1, gy1 - gy0 + 1};
+        resolve(&r, seed);
+        blended = changes_;
+    }
+    changes_ = std::move(mine);
+    changes_.insert(changes_.end(), blended.begin(), blended.end());
     return static_cast<int>(changes_.size());
 }
 

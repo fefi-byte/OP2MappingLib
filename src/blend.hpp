@@ -162,7 +162,13 @@ public:
     /// Draws a cliff along a polyline (cell coordinates). Returns the number of
     /// changes (see changes()), or -1 for invalid input.
     int drawCliff(const int32_t* xy, int count, int highSide, double wallHeight, uint64_t seed);
-    /// Solver stage of the last drawCliff: 0..7, -1 = greedy fallback, -2 = nothing drawn.
+    /// Closes the cut ends of walls after the caller painted ground across
+    /// them. removed: width*height flags, nonzero = the cell was cliff and is
+    /// ground now. Returns the number of changes (see changes()), 0 if there
+    /// was nothing to close, or -1 for invalid input.
+    int closeCliffCut(const uint8_t* removed, uint64_t seed);
+    /// Solver stage of the last drawCliff or closeCliffCut: 0..7, -1 = greedy
+    /// fallback, -2 = nothing drawn.
     int lastCliffStage() const { return lastCliffStage_; }
 
 private:
@@ -185,6 +191,7 @@ private:
     std::vector<int> tileOfMapping_;    ///< map mapping index -> profile tile (-1 unknown)
     std::vector<int> mappingOfTile_;    ///< profile tile -> map mapping index (-1 not in this map)
     std::vector<int> mappingOfCliff_;   ///< cliff tile -> map mapping index (-1 not in this map)
+    std::vector<int> cliffOfMapping_;   ///< map mapping index -> cliff tile (-1 not a cliff tile)
     int lastCliffStage_ = -2;
     std::vector<int32_t> mapping_;      ///< per cell
     std::vector<int8_t> ground_;        ///< per cell, -1 = fixed

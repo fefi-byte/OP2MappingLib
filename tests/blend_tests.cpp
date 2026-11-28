@@ -329,6 +329,42 @@ int main(int argc, char** argv) {
         CHECK(om_cliff_draw(c.map, outside, 2, OM_CLIFF_HIGH_NORTH, 3.0, 1) == -1);
         CHECK(om_cliff_draw(c.map, pts, 1, OM_CLIFF_HIGH_NORTH, 3.0, 1) == -1);
         CHECK(om_cliff_draw(c.map, pts, 3, 9, 3.0, 1) == -1);
+
+        // Closing a cut: paint mud across the L's vertical leg (rows 11-13),
+        // then let the wall ends finish cleanly.
+        TestMap e(p, 0);
+        fillWith(e, mud);
+        om_cliff_draw(e.map, pts, 3, OM_CLIFF_HIGH_LEFT, 3.0, 7);
+        const std::vector<int> wall = snapshot(e.map);
+        std::vector<int32_t> cutCells;
+        std::vector<uint8_t> removed(W * H, 0);
+        for (int y = 11; y <= 13; ++y)
+            for (int x = 0; x < W; ++x)
+                if (om_blend_ground_at(e.map, x, y) == -1) {
+                    cutCells.push_back(x);
+                    cutCells.push_back(y);
+                    removed[y * W + x] = 1;
+                }
+        CHECK(!cutCells.empty());
+        om_blend_paint(e.map, mud, cutCells.data(), static_cast<int32_t>(cutCells.size() / 2));
+        om_blend_resolve(e.map, nullptr, kSeed);
+        const int closed = om_cliff_close_cut(e.map, removed.data(), kSeed);
+        CHECK(closed > 0);
+        CHECK(om_cliff_last_stage(e.map) >= 0);
+        std::vector<om_change> cc(closed > 0 ? closed : 1);
+        om_blend_get_changes(e.map, cc.data(), closed);
+        for (int i = 0; i < closed; ++i) CHECK(cc[i].y >= 11 - 4 && cc[i].y <= 13 + 4);   // only near the cut
+        // Far from the cut the wall stands as it was.
+        const std::vector<int> after = snapshot(e.map);
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x)
+                if (y < 11 - 4 || y > 13 + 4) CHECK(after[y * W + x] == wall[y * W + x]);
+        std::printf("  cut closed: %d changes, stage %d\n", closed, om_cliff_last_stage(e.map));
+        // Nothing cut: nothing to do. Bad input: -1.
+        const std::vector<uint8_t> none(W * H, 0);
+        CHECK(om_cliff_close_cut(e.map, none.data(), kSeed) == 0);
+        CHECK(om_cliff_close_cut(e.map, nullptr, kSeed) == -1);
+        CHECK(om_cliff_close_cut(nullptr, none.data(), kSeed) == -1);
     }
 
     // --- Passable regions (enclosed areas) ----------------------------------------

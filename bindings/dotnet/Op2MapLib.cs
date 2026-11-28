@@ -506,6 +506,25 @@ namespace Op2MapLib
         }
 
         /// <summary>
+        /// Closes cut wall ends after ground was painted across a cliff (e.g. for a ramp).
+        /// </summary>
+        /// <param name="removed">Width*Height flags, row by row: true = the cell was a cliff before the stroke and is ground now.</param>
+        /// <param name="seed">Seed for blending the cells that become ground.</param>
+        /// <returns>The changes to apply: re-solved cliff tiles first, then blended ground. Empty if there was nothing to close or no solution.</returns>
+        /// <exception cref="ArgumentException">removed has the wrong length.</exception>
+        /// <exception cref="ObjectDisposedException">The map was disposed.</exception>
+        public BlendChange[] CloseCliffCut(bool[] removed, ulong seed = 0)
+        {
+            if (removed == null) throw new ArgumentNullException(nameof(removed));
+            if (removed.Length != Width * Height) throw new ArgumentException("removed needs Width*Height entries.", nameof(removed));
+            var flags = new byte[removed.Length];
+            for (int i = 0; i < removed.Length; i++) flags[i] = removed[i] ? (byte)1 : (byte)0;
+            int n = Native.om_cliff_close_cut(Live, flags, seed);
+            if (n < 0) throw new InvalidOperationException("Closing the cliff cut failed.");
+            return Changes(n);
+        }
+
+        /// <summary>
         /// How the last DrawCliff was solved: 0..7 = solver stage (0 strictest), -1 = greedy
         /// fallback (rougher joins), -2 = nothing drawn.
         /// </summary>
@@ -1183,6 +1202,7 @@ namespace Op2MapLib
         [DllImport(Lib, CallingConvention = CC)]
         internal static extern int om_cliff_draw(IntPtr m, [In] int[] xy, int count, int highSide, double wallHeight, ulong seed);
         [DllImport(Lib, CallingConvention = CC)] internal static extern int om_cliff_last_stage(IntPtr m);
+        [DllImport(Lib, CallingConvention = CC)] internal static extern int om_cliff_close_cut(IntPtr m, [In] byte[] removed, ulong seed);
         [DllImport(Lib, CallingConvention = CC)]
         internal static extern void om_cliff_snap_point(int ax, int ay, int bx, int by, out int outX, out int outY);
 

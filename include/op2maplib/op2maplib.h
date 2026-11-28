@@ -200,7 +200,7 @@ OM_API int OM_CALL om_blend_resolve(om_blend_map* map, const om_rect* region, ui
 /** Whole map: re-picks every blendable cell (a "clean up transitions" pass). */
 OM_API int OM_CALL om_blend_resolve_all(om_blend_map* map, uint64_t seed);
 
-/** Copies up to max changes from the last resolve or cliff draw. Returns the number copied. */
+/** Copies up to max changes from the last resolve, cliff draw or cut close. Returns the number copied. */
 OM_API int OM_CALL om_blend_get_changes(const om_blend_map* map, om_change* out, int32_t max);
 
 /* ------------------------------------------------------------------------ */
@@ -243,6 +243,22 @@ OM_API int OM_CALL om_profile_cliff_ground(const om_profile* profile, int ground
  */
 OM_API int OM_CALL om_cliff_draw(om_blend_map* map, const int32_t* xy, int32_t point_count,
                                  int high_side, double wall_height, uint64_t seed);
+
+/**
+ * Closes cut wall ends. Painting ground across a cliff (e.g. for a ramp)
+ * leaves the wall cut off with rock pointing into the open; this lets both
+ * new ends finish cleanly. Call it after applying the painted ground.
+ *   removed : width*height bytes, row by row, nonzero = the cell was a cliff
+ *             before the stroke and is ground now (cells that still hold a
+ *             cliff tile are ignored).
+ * Only the cliff cells within two cells of the cut are solved again; the rest
+ * of the wall stays as it is. Cliff cells that keep no rock become ground of
+ * their surroundings and are blended. Returns the number of changes
+ * (om_blend_get_changes; cliff tiles first, then blended ground), 0 if there
+ * was nothing to close or no solution (the wall stays as it is), or -1 for
+ * invalid input. om_cliff_last_stage reports the solver stage.
+ */
+OM_API int OM_CALL om_cliff_close_cut(om_blend_map* map, const uint8_t* removed, uint64_t seed);
 
 /**
  * How the last om_cliff_draw was solved: 0..7 = solver stage (0 is the

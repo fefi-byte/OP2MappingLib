@@ -1043,12 +1043,20 @@ struct Prepared {
     std::vector<std::vector<std::pair<int, int>>> nbrs;  ///< per cell: (side, cell index)
     std::vector<int> fehl, ofs, bin, inn;              ///< [cell*n + tile]
     std::vector<double> share;                         ///< |fa - cell rock share|
+    /// Per cell: (side, tile row) of fixed neighbours -- tiles that stay where
+    /// they are and that the cell's tile has to fit (closing a cut).
+    std::vector<std::vector<std::pair<int, int>>> fixed;
 };
 
 /// Scores every tile for every cliff cell of the band. openOk lists cells
 /// (north-line ends) whose given side may face open ground: that side is
 /// treated as closed, so a tile with rock there isn't rejected.
-Prepared prepare(const CliffTable& tab, const Fine& fine, const std::map<std::pair<int, int>, int>& openOk) {
+/// only (w*h, optional): solve just these cells; every other rock cell still
+/// counts as cliff (a closed side). fixedRow (w*h, optional): table row of a
+/// tile that stays in place, -1 = none; it becomes a fixed neighbour of the
+/// solved cells next to it.
+Prepared prepare(const CliffTable& tab, const Fine& fine, const std::map<std::pair<int, int>, int>& openOk,
+                 const std::vector<uint8_t>* only = nullptr, const std::vector<int>* fixedRow = nullptr) {
     Prepared p;
     p.w = fine.w;
     p.h = fine.h;
@@ -1057,7 +1065,7 @@ Prepared prepare(const CliffTable& tab, const Fine& fine, const std::map<std::pa
     p.cellAt.assign(hat.size(), -1);
     for (int y = 0; y < fine.h; ++y)
         for (int x = 0; x < fine.w; ++x)
-            if (hat[static_cast<size_t>(y) * fine.w + x]) {
+            if (hat[static_cast<size_t>(y) * fine.w + x] && (!only || (*only)[static_cast<size_t>(y) * fine.w + x])) {
                 p.cellAt[static_cast<size_t>(y) * fine.w + x] = static_cast<int>(p.cells.size());
                 p.cells.push_back({x, y});
             }
@@ -1069,6 +1077,7 @@ Prepared prepare(const CliffTable& tab, const Fine& fine, const std::map<std::pa
     p.inn.resize(mn);
     p.share.resize(mn);
     p.nbrs.resize(static_cast<size_t>(p.m));
+    p.fixed.resize(static_cast<size_t>(p.m));
     for (int k = 0; k < p.m; ++k) {
         const int x = p.cells[k].first, y = p.cells[k].second;
         std::array<bool, 4> open{};
@@ -1103,6 +1112,10 @@ Prepared prepare(const CliffTable& tab, const Fine& fine, const std::map<std::pa
             if (nx < 0 || ny < 0 || nx >= fine.w || ny >= fine.h) continue;
             const int q = p.cellAt[static_cast<size_t>(ny) * fine.w + nx];
             if (q >= 0) p.nbrs[k].push_back({s, q});
+            else if (fixedRow) {
+                const int f = (*fixedRow)[static_cast<size_t>(ny) * fine.w + nx];
+                if (f >= 0) p.fixed[k].push_back({s, f});
+            }
         }
     }
     return p;
@@ -1121,8 +1134,14 @@ public:
         dom_.resize(static_cast<size_t>(p.m));
         for (int k = 0; k < p.m; ++k) {
             std::vector<int> cand;
-            for (int t = 0; t < p.n; ++t)
-                if (p.fehl[idx(k, t)] <= maxDev) cand.push_back(t);
+            for (int t = 0; t < p.n; ++t) {
+                if (p.fehl[idx(k, t)] > maxDev) continue;
+                // A fixed neighbour f on side s: only tiles it may stand beside.
+                bool fits = true;
+                for (const auto& [s, f] : p.fixed[k])
+                    if (!tab.allowed(onlySeen, s, t, f)) fits = false;
+                if (fits) cand.push_back(t);
+            }
             if (cand.empty()) {   // some cell has no tile at all: stage can't succeed
                 empty_ = true;
                 return;
@@ -1421,6 +1440,123 @@ CliffResult solveCliffLine(const CliffData& data, int family,
     for (size_t i = 0; i < g.size(); ++i)
         if (g[i] >= 0) res.tile[i] = tab.ids[g[i]];
     res.stage = -1;
+    return res;
+}
+
+/// See cliff.hpp. Ported from the editor's schnitt_schliessen (Python):
+/// band from the inner images, the edge lines towards the cut cleared, the
+/// terrain rules applied, the old band restored outside the zone, then the
+/// solver stages on the zone's rock cells with the standing tiles fixed.
+CliffCutResult solveCliffCut(const CliffData& data, int family, const std::vector<int>& cliffTiles,
+                             const std::vector<uint8_t>& removed, int width, int height, int zone) {
+    CliffCutResult res;
+    res.width = width;
+    res.height = height;
+    const size_t n = static_cast<size_t>(width) * height;
+    res.tile.assign(n, -1);
+    res.ground.assign(n, 0);
+    if (width <= 0 || height <= 0 || cliffTiles.size() != n || removed.size() != n || !data.usable(family))
+        return res;
+    const CliffTable& tab = data.table(family);
+    std::vector<int> row(data.tiles.size(), -1);   // cliff tile index -> table row of this family
+    for (int i = 0; i < tab.n; ++i) row[tab.ids[i]] = i;
+    auto rowOf = [&](size_t i) {
+        const int t = cliffTiles[i];
+        return (t >= 0 && t < static_cast<int>(row.size())) ? row[t] : -1;
+    };
+
+    // The standing wall (this family, not cut), the zone around the cut, and
+    // the wall cells inside it, which are solved again.
+    std::vector<uint8_t> wall(n, 0), near(n, 0), redo(n, 0);
+    for (size_t i = 0; i < n; ++i) {
+        near[i] = removed[i] ? 1 : 0;
+        wall[i] = !removed[i] && rowOf(i) >= 0;
+    }
+    for (int r = 0; r < zone; ++r) {
+        const std::vector<uint8_t> prev = near;
+        for (int y = 0; y < height; ++y)
+            for (int x = 0; x < width; ++x) {
+                if (prev[static_cast<size_t>(y) * width + x]) continue;
+                for (int s = 0; s < 4; ++s) {
+                    const int nx = x + DX[s], ny = y + DY[s];
+                    if (nx >= 0 && ny >= 0 && nx < width && ny < height && prev[static_cast<size_t>(ny) * width + nx]) {
+                        near[static_cast<size_t>(y) * width + x] = 1;
+                        break;
+                    }
+                }
+            }
+    }
+    bool anyRedo = false;
+    for (size_t i = 0; i < n; ++i) {
+        redo[i] = near[i] && wall[i];
+        anyRedo = anyRedo || redo[i];
+    }
+    if (!anyRedo) return res;
+
+    // Rock band of the standing wall from the tiles' inner images (all rock
+    // where a tile has none).
+    Fine fine(width, height);
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x) {
+            const size_t i = static_cast<size_t>(y) * width + x;
+            if (!wall[i]) continue;
+            const CliffTile& c = data.tiles[cliffTiles[i]];
+            for (int r = 0; r < F; ++r)
+                for (int col = 0; col < F; ++col) fine.setSub(x, y, r, col, c.hasInner ? c.inner[r][col] : true);
+        }
+    const Fine before = fine;
+    // Give way at the cut: in the cells to solve, clear the edge line facing
+    // a cut cell, so no rock points into the open there.
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x) {
+            if (!redo[static_cast<size_t>(y) * width + x]) continue;
+            for (int s = 0; s < 4; ++s) {
+                const int nx = x + DX[s], ny = y + DY[s];
+                if (nx < 0 || ny < 0 || nx >= width || ny >= height || !removed[static_cast<size_t>(ny) * width + nx])
+                    continue;
+                for (int k = 0; k < F; ++k) fine.setEdge(x, y, s, k, false);
+            }
+        }
+    Fine gel = conditionTerrain(fine, tab, true);
+    // Outside the zone the old band holds: the old tiles stay there.
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x) {
+            if (redo[static_cast<size_t>(y) * width + x]) continue;
+            for (int r = 0; r < F; ++r)
+                for (int col = 0; col < F; ++col) gel.setSub(x, y, r, col, before.sub(x, y, r, col));
+        }
+
+    const std::vector<uint8_t> hat = cellsWithRock(gel);
+    std::vector<uint8_t> only(n, 0);
+    std::vector<int> fixedRow(n, -1);
+    bool anyOnly = false;
+    for (size_t i = 0; i < n; ++i) {
+        only[i] = redo[i] && hat[i];
+        anyOnly = anyOnly || only[i];
+        if (wall[i] && !redo[i]) fixedRow[i] = rowOf(i);
+    }
+    if (anyOnly) {
+        const Prepared prep = prepare(tab, gel, {}, &only, &fixedRow);
+        bool solved = false;
+        int stage = 0;
+        for (const auto& [onlySeen, dev] : kStages) {
+            Solver solver(tab, prep, onlySeen, dev, stepBudget(prep.m));
+            if (solver.solve()) {
+                for (int k = 0; k < prep.m; ++k) {
+                    const auto& c = prep.cells[k];
+                    res.tile[static_cast<size_t>(c.second) * width + c.first] = tab.ids[solver.assignment()[k]];
+                }
+                solved = true;
+                break;
+            }
+            ++stage;
+        }
+        if (!solved) return res;   // leave the wall as it is
+        res.stage = stage;
+    } else {
+        res.stage = 0;
+    }
+    for (size_t i = 0; i < n; ++i) res.ground[i] = redo[i] && !hat[i];
     return res;
 }
 

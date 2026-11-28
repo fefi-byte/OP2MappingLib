@@ -166,6 +166,34 @@ def measure(bm: BlendMap, changes: list, lookup: dict, tiles: list) -> dict:
     return out
 
 
+def cliff_state(bm: BlendMap, lookup: dict, tiles: list, w: int, h: int) -> dict:
+    """(x, y) -> cliff tile index for every cell holding a cliff tile that is not
+    all ground (plain ground tiles that are also in the cliff set don't count;
+    tiles coded "either" on some edges do)."""
+    out = {}
+    for y in range(h):
+        for x in range(w):
+            i = lookup.get(bm.tile_at(x, y))
+            if i is not None and tiles[i]["edges"].replace("0", "").strip():
+                out[(x, y)] = i
+    return out
+
+
+def rock_open(cliff: dict, tiles: list) -> tuple[int, int]:
+    """(rock edges facing non-cliff cells, holes) of a whole cliff state."""
+    ro = holes = 0
+    for (x, y), i in cliff.items():
+        e = edges_of(tiles[i])
+        for s in SIDES:
+            j = cliff.get((x + DX[s], y + DY[s]))
+            if j is None:
+                ro += 1 in e[s]
+            elif s in ("e", "s"):
+                f = edges_of(tiles[j])[OPP[s]]
+                holes += sum(1 for u, v in zip(e[s], f) if u == 0 and v == 0) >= 3
+    return ro, holes
+
+
 def picture(changes: list, lookup: dict, tiles: list, w: int, h: int) -> str:
     """ASCII picture of a drawn cliff (letters: see the module docstring),
     trimmed of empty rows and trailing ground."""
@@ -268,6 +296,52 @@ def main() -> int:
     a.paint(san, [(x, y) for y in range(0, 30) for x in range(10, 45) if (x, y) not in cliff_cells])
     a.resolve(seed=3)
     check(all(a.tile_at(c.x, c.y) == c.new_mapping for c in ca), "painting next to a cliff keeps it")
+
+    # Closing cuts: every test wall at heights 3 and 5 on mud and sand, cut
+    # across the middle of its first segment (3 cells wide), then closed.
+    # Measured on the whole wall before and after: rock edges facing open
+    # ground, holes, and determinism.
+    cut_totals = {}
+    for ground in ("mud", "san"):
+        t = {"walls": 0, "closed": 0, "open_before": 0, "open_after": 0, "holes": 0}
+        for height in (3, 5):
+            for name, pts, side in SCENARIOS:
+                results = []
+                for _ in range(2):   # twice, for determinism
+                    bm = fill_map(profile, w, h, ground)
+                    bm.draw_cliff(pts, side, height, 1)
+                    wall = cliff_state(bm, lookup, tiles, w, h)
+                    (ax, ay), (bx, by) = pts[0], pts[1]
+                    px, py = (ax + bx) // 2, (ay + by) // 2
+                    if abs(bx - ax) >= abs(by - ay):
+                        cut = [(x, y) for (x, y) in wall if abs(x - px) <= 1]
+                    else:
+                        cut = [(x, y) for (x, y) in wall if abs(y - py) <= 1]
+                    bm.paint(profile.find_ground(ground), cut)
+                    bm.resolve(seed=2)
+                    opened = cliff_state(bm, lookup, tiles, w, h)
+                    removed = [0] * (w * h)
+                    for (x, y) in cut:
+                        if (x, y) not in opened:
+                            removed[y * w + x] = 1
+                    changes = bm.close_cliff_cut(removed, seed=3)
+                    results.append([(c.x, c.y, c.new_mapping) for c in changes])
+                check(results[0] == results[1], f"{ground} {name}: closing is deterministic")
+                closed = cliff_state(bm, lookup, tiles, w, h)
+                t["walls"] += 1
+                t["closed"] += bool(changes)
+                t["open_before"] += rock_open(opened, tiles)[0]
+                ro, holes = rock_open(closed, tiles)
+                t["open_after"] += ro
+                t["holes"] += holes
+        cut_totals[ground] = t
+    print()
+    print(f"{'cuts':6} {'walls':>5} {'closed':>6} {'rock->open before':>18} {'after':>6} {'holes':>5}")
+    for ground, t in cut_totals.items():
+        print(f"{ground:6} {t['walls']:5} {t['closed']:6} {t['open_before']:18} {t['open_after']:6} {t['holes']:5}")
+        check(t["holes"] == 0, f"{ground}: closing a cut leaves no holes")
+        check(t["open_after"] * 5 <= t["open_before"], f"{ground}: closing removes most rock facing the cut")
+    check(fill_map(profile, w, h, "mud").close_cliff_cut([0] * (w * h)) == [], "nothing cut, nothing to close")
 
     # Invalid input: draw_cliff must raise rather than return.
     try:

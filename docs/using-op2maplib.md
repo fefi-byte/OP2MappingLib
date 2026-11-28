@@ -190,6 +190,18 @@ om_blend_get_changes(map, changes, n);      /* cliff tiles with their cell types
   original maps), -1 for the greedy fallback.
 - Cliff cells become fixed, so painting next to a cliff never replaces it.
   Painting *over* it does.
+- **Ramps and wall ends**: painting ground across a wall leaves it cut off,
+  with rock pointing into the open. After applying the stroke, pass the cells
+  that were cliff and are ground now to `om_cliff_close_cut`
+  (`close_cliff_cut`, `BlendMap.CloseCliffCut`): the cliff cells within two
+  cells of the cut are solved again so both new ends finish cleanly (a ramp),
+  the rest of the wall stays as it is.
+
+```c
+/* removed[y * width + x] = 1 where the stroke turned a cliff cell into ground */
+int n = om_cliff_close_cut(map, removed, seed);
+om_blend_get_changes(map, changes, n);      /* re-solved cliff tiles, then blended ground */
+```
 
 ### Finding enclosed areas
 

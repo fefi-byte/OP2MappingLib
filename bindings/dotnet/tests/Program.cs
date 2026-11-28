@@ -111,6 +111,23 @@ internal static class Program
                 string hash = Fnv1a64(all.Select(p => map.TileAt(p.X, p.Y)));
                 Console.WriteLine("cliff vector hash: " + hash);
                 Check(hash == "5e0acf226271c020", "cliff vector hash matches C++ and Python");
+
+                // Closing a cut: paint mud across the vertical leg (rows 11-13), then close.
+                var removed = new bool[w * h];
+                var cut = new List<Point>();
+                for (int y = 11; y <= 13; y++)
+                    for (int x = 0; x < w; x++)
+                        if (map.GroundAt(x, y) == -1)
+                        {
+                            removed[y * w + x] = true;
+                            cut.Add(new Point(x, y));
+                        }
+                map.Paint(mud, cut);
+                map.Resolve(1234);
+                BlendChange[] closed = map.CloseCliffCut(removed, 1234);
+                Check(closed.Length > 0 && map.LastCliffStage >= 0, "cliff cut closed");
+                Check(closed.All(c => c.Y >= 7 && c.Y <= 17), "cut closing stays near the cut");
+                Check(map.CloseCliffCut(new bool[w * h]).Length == 0, "nothing cut, nothing to close");
             }
 
             // Regions: a wall ring around a 3x3 pocket.
