@@ -1464,100 +1464,125 @@ CliffCutResult solveCliffCut(const CliffData& data, int family, const std::vecto
         const int t = cliffTiles[i];
         return (t >= 0 && t < static_cast<int>(row.size())) ? row[t] : -1;
     };
-
-    // The standing wall (this family, not cut), the zone around the cut, and
-    // the wall cells inside it, which are solved again.
-    std::vector<uint8_t> wall(n, 0), near(n, 0), redo(n, 0);
-    for (size_t i = 0; i < n; ++i) {
-        near[i] = removed[i] ? 1 : 0;
-        wall[i] = !removed[i] && rowOf(i) >= 0;
-    }
-    for (int r = 0; r < zone; ++r) {
-        const std::vector<uint8_t> prev = near;
+    // Grows a mask by one cell (4-neighbours), within the area.
+    auto grow = [&](std::vector<uint8_t>& m) {
+        const std::vector<uint8_t> prev = m;
         for (int y = 0; y < height; ++y)
             for (int x = 0; x < width; ++x) {
                 if (prev[static_cast<size_t>(y) * width + x]) continue;
                 for (int s = 0; s < 4; ++s) {
                     const int nx = x + DX[s], ny = y + DY[s];
                     if (nx >= 0 && ny >= 0 && nx < width && ny < height && prev[static_cast<size_t>(ny) * width + nx]) {
-                        near[static_cast<size_t>(y) * width + x] = 1;
+                        m[static_cast<size_t>(y) * width + x] = 1;
                         break;
                     }
                 }
             }
-    }
-    bool anyRedo = false;
-    for (size_t i = 0; i < n; ++i) {
-        redo[i] = near[i] && wall[i];
-        anyRedo = anyRedo || redo[i];
-    }
-    if (!anyRedo) return res;
+    };
 
-    // Rock band of the standing wall from the tiles' inner images (all rock
-    // where a tile has none).
-    Fine fine(width, height);
-    for (int y = 0; y < height; ++y)
-        for (int x = 0; x < width; ++x) {
-            const size_t i = static_cast<size_t>(y) * width + x;
-            if (!wall[i]) continue;
-            const CliffTile& c = data.tiles[cliffTiles[i]];
-            for (int r = 0; r < F; ++r)
-                for (int col = 0; col < F; ++col) fine.setSub(x, y, r, col, c.hasInner ? c.inner[r][col] : true);
+    // One try with a given cut. True and res filled if a solver stage worked.
+    auto tryCut = [&](const std::vector<uint8_t>& cut) -> bool {
+        // The standing wall (this family, not cut), the zone around the cut,
+        // and the wall cells inside it, which are solved again.
+        std::vector<uint8_t> wall(n, 0), near(n, 0), redo(n, 0);
+        for (size_t i = 0; i < n; ++i) {
+            near[i] = cut[i] ? 1 : 0;
+            wall[i] = !cut[i] && rowOf(i) >= 0;
         }
-    const Fine before = fine;
-    // Give way at the cut: in the cells to solve, clear the edge line facing
-    // a cut cell, so no rock points into the open there.
-    for (int y = 0; y < height; ++y)
-        for (int x = 0; x < width; ++x) {
-            if (!redo[static_cast<size_t>(y) * width + x]) continue;
-            for (int s = 0; s < 4; ++s) {
-                const int nx = x + DX[s], ny = y + DY[s];
-                if (nx < 0 || ny < 0 || nx >= width || ny >= height || !removed[static_cast<size_t>(ny) * width + nx])
-                    continue;
-                for (int k = 0; k < F; ++k) fine.setEdge(x, y, s, k, false);
+        for (int r = 0; r < zone; ++r) grow(near);
+        bool anyRedo = false;
+        for (size_t i = 0; i < n; ++i) {
+            redo[i] = near[i] && wall[i];
+            anyRedo = anyRedo || redo[i];
+        }
+        if (!anyRedo) return false;
+
+        // Rock band of the standing wall from the tiles' inner images (all
+        // rock where a tile has none).
+        Fine fine(width, height);
+        for (int y = 0; y < height; ++y)
+            for (int x = 0; x < width; ++x) {
+                const size_t i = static_cast<size_t>(y) * width + x;
+                if (!wall[i]) continue;
+                const CliffTile& c = data.tiles[cliffTiles[i]];
+                for (int r = 0; r < F; ++r)
+                    for (int col = 0; col < F; ++col) fine.setSub(x, y, r, col, c.hasInner ? c.inner[r][col] : true);
             }
-        }
-    Fine gel = conditionTerrain(fine, tab, true);
-    // Outside the zone the old band holds: the old tiles stay there.
-    for (int y = 0; y < height; ++y)
-        for (int x = 0; x < width; ++x) {
-            if (redo[static_cast<size_t>(y) * width + x]) continue;
-            for (int r = 0; r < F; ++r)
-                for (int col = 0; col < F; ++col) gel.setSub(x, y, r, col, before.sub(x, y, r, col));
-        }
-
-    const std::vector<uint8_t> hat = cellsWithRock(gel);
-    std::vector<uint8_t> only(n, 0);
-    std::vector<int> fixedRow(n, -1);
-    bool anyOnly = false;
-    for (size_t i = 0; i < n; ++i) {
-        only[i] = redo[i] && hat[i];
-        anyOnly = anyOnly || only[i];
-        if (wall[i] && !redo[i]) fixedRow[i] = rowOf(i);
-    }
-    if (anyOnly) {
-        const Prepared prep = prepare(tab, gel, {}, &only, &fixedRow);
-        bool solved = false;
-        int stage = 0;
-        for (const auto& [onlySeen, dev] : kStages) {
-            Solver solver(tab, prep, onlySeen, dev, stepBudget(prep.m));
-            if (solver.solve()) {
-                for (int k = 0; k < prep.m; ++k) {
-                    const auto& c = prep.cells[k];
-                    res.tile[static_cast<size_t>(c.second) * width + c.first] = tab.ids[solver.assignment()[k]];
+        const Fine before = fine;
+        // Give way at the cut: in the cells to solve, clear the edge line
+        // facing a cut cell, so no rock points into the open there.
+        for (int y = 0; y < height; ++y)
+            for (int x = 0; x < width; ++x) {
+                if (!redo[static_cast<size_t>(y) * width + x]) continue;
+                for (int s = 0; s < 4; ++s) {
+                    const int nx = x + DX[s], ny = y + DY[s];
+                    if (nx < 0 || ny < 0 || nx >= width || ny >= height || !cut[static_cast<size_t>(ny) * width + nx])
+                        continue;
+                    for (int k = 0; k < F; ++k) fine.setEdge(x, y, s, k, false);
                 }
-                solved = true;
-                break;
             }
-            ++stage;
+        Fine gel = conditionTerrain(fine, tab, true);
+        // Outside the zone the old band holds: the old tiles stay there.
+        for (int y = 0; y < height; ++y)
+            for (int x = 0; x < width; ++x) {
+                if (redo[static_cast<size_t>(y) * width + x]) continue;
+                for (int r = 0; r < F; ++r)
+                    for (int col = 0; col < F; ++col) gel.setSub(x, y, r, col, before.sub(x, y, r, col));
+            }
+
+        const std::vector<uint8_t> hat = cellsWithRock(gel);
+        std::vector<uint8_t> only(n, 0);
+        std::vector<int> fixedRow(n, -1);
+        bool anyOnly = false;
+        for (size_t i = 0; i < n; ++i) {
+            only[i] = redo[i] && hat[i];
+            anyOnly = anyOnly || only[i];
+            if (wall[i] && !redo[i]) fixedRow[i] = rowOf(i);
         }
-        if (!solved) return res;   // leave the wall as it is
+        std::fill(res.tile.begin(), res.tile.end(), -1);
+        int stage = 0;
+        if (anyOnly) {
+            const Prepared prep = prepare(tab, gel, {}, &only, &fixedRow);
+            bool solved = false;
+            for (const auto& [onlySeen, dev] : kStages) {
+                Solver solver(tab, prep, onlySeen, dev, stepBudget(prep.m));
+                if (solver.solve()) {
+                    for (int k = 0; k < prep.m; ++k) {
+                        const auto& c = prep.cells[k];
+                        res.tile[static_cast<size_t>(c.second) * width + c.first] = tab.ids[solver.assignment()[k]];
+                    }
+                    solved = true;
+                    break;
+                }
+                ++stage;
+            }
+            if (!solved) return false;
+        }
         res.stage = stage;
-    } else {
-        res.stage = 0;
+        // Ground: zone cells left without rock, and wall cells the cut was
+        // widened over (see below).
+        for (size_t i = 0; i < n; ++i)
+            res.ground[i] = (redo[i] && !hat[i]) || (cut[i] && !removed[i] && rowOf(i) >= 0);
+        return true;
+    };
+
+    // If the cut has no solution (e.g. a diagonal wall cut straight across),
+    // let the wall end recede: widen the cut by one cell into the wall, at
+    // most twice.
+    std::vector<uint8_t> cut(n, 0);
+    for (size_t i = 0; i < n; ++i) cut[i] = removed[i] ? 1 : 0;
+    for (int widen = 0; widen <= 2; ++widen) {
+        if (widen > 0) {
+            std::vector<uint8_t> wider = cut;
+            grow(wider);
+            for (size_t i = 0; i < n; ++i)
+                if (wider[i] && !cut[i] && rowOf(i) >= 0) cut[i] = 1;   // only wall cells join the cut
+        }
+        if (tryCut(cut)) return res;
     }
-    for (size_t i = 0; i < n; ++i) res.ground[i] = redo[i] && !hat[i];
-    return res;
+    std::fill(res.tile.begin(), res.tile.end(), -1);
+    res.stage = -2;
+    return res;   // no solution: leave the wall as it is
 }
 
 /// See cliff.hpp. Picks the allowed direction closest in angle to a -> b

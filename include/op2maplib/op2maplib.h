@@ -252,8 +252,10 @@ OM_API int OM_CALL om_cliff_draw(om_blend_map* map, const int32_t* xy, int32_t p
  *             before the stroke and is ground now (cells that still hold a
  *             cliff tile are ignored).
  * Only the cliff cells within two cells of the cut are solved again; the rest
- * of the wall stays as it is. Cliff cells that keep no rock become ground of
- * their surroundings and are blended. Returns the number of changes
+ * of the wall stays as it is. Where the cut cannot be closed as it is (e.g. a
+ * diagonal wall cut straight across), the wall end recedes by up to two cells.
+ * Cliff cells that keep no rock become ground of their surroundings and are
+ * blended. Returns the number of changes
  * (om_blend_get_changes; cliff tiles first, then blended ground), 0 if there
  * was nothing to close or no solution (the wall stays as it is), or -1 for
  * invalid input. om_cliff_last_stage reports the solver stage.

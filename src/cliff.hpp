@@ -115,7 +115,9 @@ struct CliffCutResult {
 /// recovered from the tiles' inner images and opened towards the cut; only
 /// the cliff cells within `zone` cells of the cut are solved again, and the
 /// rest of the wall stays, constraining them as fixed neighbours. If no
-/// solver stage succeeds, nothing changes (stage -2). Deterministic.
+/// solver stage succeeds, the wall end recedes: the cut grows by one cell into
+/// the wall (at most twice), and those cells become ground too. If even that
+/// fails, nothing changes (stage -2). Deterministic.
 CliffCutResult solveCliffCut(const CliffData& data, int family, const std::vector<int>& cliffTiles,
                              const std::vector<uint8_t>& removed, int width, int height, int zone = 2);
 

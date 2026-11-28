@@ -340,6 +340,7 @@ def main() -> int:
     for ground, t in cut_totals.items():
         print(f"{ground:6} {t['walls']:5} {t['closed']:6} {t['open_before']:18} {t['open_after']:6} {t['holes']:5}")
         check(t["holes"] == 0, f"{ground}: closing a cut leaves no holes")
+        check(t["closed"] == t["walls"], f"{ground}: every cut is closed")
         check(t["open_after"] * 5 <= t["open_before"], f"{ground}: closing removes most rock facing the cut")
     check(fill_map(profile, w, h, "mud").close_cliff_cut([0] * (w * h)) == [], "nothing cut, nothing to close")
 

@@ -195,7 +195,8 @@ om_blend_get_changes(map, changes, n);      /* cliff tiles with their cell types
   that were cliff and are ground now to `om_cliff_close_cut`
   (`close_cliff_cut`, `BlendMap.CloseCliffCut`): the cliff cells within two
   cells of the cut are solved again so both new ends finish cleanly (a ramp),
-  the rest of the wall stays as it is.
+  the rest of the wall stays as it is. Where that has no solution (a diagonal
+  wall cut straight across), the wall end recedes by up to two cells.
 
 ```c
 /* removed[y * width + x] = 1 where the stroke turned a cliff cell into ground */

@@ -510,7 +510,7 @@ namespace Op2MapLib
         /// </summary>
         /// <param name="removed">Width*Height flags, row by row: true = the cell was a cliff before the stroke and is ground now.</param>
         /// <param name="seed">Seed for blending the cells that become ground.</param>
-        /// <returns>The changes to apply: re-solved cliff tiles first, then blended ground. Empty if there was nothing to close or no solution.</returns>
+        /// <returns>The changes to apply: re-solved cliff tiles first, then blended ground (a wall end may recede by up to two cells). Empty if there was nothing to close or no solution.</returns>
         /// <exception cref="ArgumentException">removed has the wrong length.</exception>
         /// <exception cref="ObjectDisposedException">The map was disposed.</exception>
         public BlendChange[] CloseCliffCut(bool[] removed, ulong seed = 0)

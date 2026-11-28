@@ -579,8 +579,10 @@ class BlendMap:
 
         Returns:
             The changes to apply to your map: re-solved cliff tiles first,
-            then the blended ground of cliff cells that keep no rock. Empty if
-            there was nothing to close or no solution (the wall stays as is).
+            then the blended ground of cliff cells that keep no rock (where a
+            cut cannot be closed as it is, the wall end recedes by up to two
+            cells). Empty if there was nothing to close or no solution (the
+            wall stays as is).
 
         Raises:
             ValueError:     removed has the wrong size.
